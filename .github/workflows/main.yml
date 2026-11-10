@@ -65,7 +65,10 @@ jobs:
           # CMake 4 erlaubt OLD fuer Policies < 3.5 nicht mehr
           sed -i -E 's/cmake_policy\(SET (CMP0020|CMP0043) OLD\)/cmake_policy(SET \1 NEW)/' kst/CMakeLists.txt
           sed -i -E 's/cmake_minimum_required\(VERSION [0-9.]+\)/cmake_minimum_required(VERSION 3.5)/' kst/CMakeLists.txt
+          # Ohne svnversion existiert das Target "Revision" nicht; CMake 4 bricht dann ab
+          sed -i 's/^kst_revision_project_name(Revision)/# &/' kst/CMakeLists.txt
           head -15 kst/CMakeLists.txt
+          grep -n "kst_revision_project_name" kst/CMakeLists.txt
 
       - name: Konfigurieren
         run: |
@@ -79,6 +82,7 @@ jobs:
             -Dkst_pch=OFF \
             -Dkst_merge_files=OFF \
             -Dkst_svnversion=OFF \
+            -Dkst_revision="$KST_REF" \
             -Dkst_console=OFF \
             -Dkst_version_string="$KST_VER" \
             -Dkst_install_prefix="$PWD/Kst-$KST_VER"
