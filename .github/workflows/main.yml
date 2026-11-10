@@ -67,6 +67,9 @@ jobs:
           sed -i -E 's/cmake_minimum_required\(VERSION [0-9.]+\)/cmake_minimum_required(VERSION 3.5)/' kst/CMakeLists.txt
           # Ohne svnversion existiert das Target "Revision" nicht; CMake 4 bricht dann ab
           sed -i 's/^kst_revision_project_name(Revision)/# &/' kst/CMakeLists.txt
+          # MSYS2 legt die Qt5-Plugins unter share/qt5/plugins ab, nicht unter plugins
+          sed -i 's#${QT_BINARY_DIR}/../plugins/#${QT_BINARY_DIR}/../share/qt5/plugins/#g' kst/misc/CMakeLists.txt
+          grep -n "qt5/plugins" kst/misc/CMakeLists.txt
           head -15 kst/CMakeLists.txt
           grep -n "kst_revision_project_name" kst/CMakeLists.txt
 
