@@ -106,7 +106,7 @@ jobs:
 
           # Qt-DLLs + Qt-Plugins (platforms, imageformats, styles, printsupport ...)
           WDQ=$(command -v windeployqt-qt5 || command -v windeployqt)
-          "$WDQ" --release --no-translations --compiler-runtime "$BIN/kst2.exe"
+          "$WDQ" --release --no-translations --no-angle --no-opengl-sw --compiler-runtime "$BIN/kst2.exe"
 
           # Alle weiteren DLL-Abhaengigkeiten aus /ucrt64/bin neben kst2.exe kopieren
           # (auch die der Kst-Plugins: gsl, netcdf, cfitsio, matio, hdf5, tiff ...)
