@@ -1,0 +1,144 @@
+# Kst 2.1 (Tag v2.1-2024-10-20) fuer Windows bauen:
+#   - Kst-2.1-win64-portable.zip  (entpacken, bin\kst2.exe starten)
+#   - Kst-2.1-win64-setup.exe     (NSIS-Installer mit Startmenue-Eintrag und Deinstaller)
+#
+# Benutzung: in ein beliebiges eigenes GitHub-Repo als .github/workflows/build-kst-windows.yml
+# legen, dann unter "Actions" -> "Build Kst for Windows" -> "Run workflow" starten.
+# Die fertigen Dateien liegen danach unter "Artifacts" des Laufs.
+
+name: Build Kst for Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      kst_ref:
+        description: "Kst Git-Tag oder Branch"
+        default: "v2.1-2024-10-20"
+      kst_version:
+        description: "Versionsstring"
+        default: "2.1"
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      KST_REF: ${{ github.event.inputs.kst_ref || 'v2.1-2024-10-20' }}
+      KST_VER: ${{ github.event.inputs.kst_version || '2.1' }}
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Kst-Quellcode holen
+        uses: actions/checkout@v4
+        with:
+          repository: Kst-plot/kst
+          ref: ${{ env.KST_REF }}
+          path: kst
+
+      - name: Packaging-Skript holen
+        uses: actions/checkout@v4
+        with:
+          path: self
+
+      - name: MSYS2 (UCRT64) mit Qt5 und Plugin-Bibliotheken
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            zip
+          pacboy: >-
+            toolchain:p
+            cmake:p
+            ninja:p
+            qt5-base:p
+            qt5-svg:p
+            qt5-tools:p
+            gsl:p
+            netcdf:p
+            cfitsio:p
+            matio:p
+            hdf5:p
+            libtiff:p
+
+      - name: Konfigurieren
+        run: |
+          cmake -S kst -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -Dkst_qt5=ON \
+            -Dkst_release=ON \
+            -Dkst_3rdparty=ON \
+            -Dkst_dataobjects=ON \
+            -Dkst_pch=OFF \
+            -Dkst_merge_files=OFF \
+            -Dkst_svnversion=OFF \
+            -Dkst_console=OFF \
+            -Dkst_version_string="$KST_VER" \
+            -Dkst_install_prefix="$PWD/Kst-$KST_VER"
+
+      - name: Bauen
+        run: cmake --build build -j 4
+
+      - name: Installieren
+        run: cmake --install build --strip
+
+      - name: Qt- und Laufzeit-DLLs einsammeln (portable)
+        run: |
+          set -e
+          DEST="$PWD/Kst-$KST_VER"
+          BIN="$DEST/bin"
+
+          # Qt-DLLs + Qt-Plugins (platforms, imageformats, styles, printsupport ...)
+          WDQ=$(command -v windeployqt-qt5 || command -v windeployqt)
+          "$WDQ" --release --no-translations --compiler-runtime "$BIN/kst2.exe"
+
+          # Alle weiteren DLL-Abhaengigkeiten aus /ucrt64/bin neben kst2.exe kopieren
+          # (auch die der Kst-Plugins: gsl, netcdf, cfitsio, matio, hdf5, tiff ...)
+          for pass in 1 2 3; do
+            find "$DEST" \( -iname '*.exe' -o -iname '*.dll' \) -print0 |
+              xargs -0 -n1 ldd 2>/dev/null |
+              awk '{print $3}' | grep -i '^/ucrt64/' | sort -u |
+              while read -r dll; do
+                [ -f "$BIN/$(basename "$dll")" ] || cp -v "$dll" "$BIN/"
+              done
+          done
+
+          # Pfade relativ halten
+          printf '[Paths]\nPrefix=.\nPlugins=.\n' > "$BIN/qt.conf"
+
+          cp kst/src/images/kst.ico "$DEST/kst.ico"
+          cp kst/COPYING "$DEST/COPYING.txt"
+          echo "Kst $KST_VER portable - starten mit bin\\kst2.exe" > "$DEST/README.txt"
+
+      - name: Smoke-Test (Version ausgeben)
+        continue-on-error: true
+        run: |
+          # Ohne MSYS2 im PATH starten, damit fehlende DLLs auffallen
+          PATH=/c/Windows/system32 timeout 30 "./Kst-$KST_VER/bin/kst2.exe" --version || true
+          ls "Kst-$KST_VER/lib/kst2/plugins" | head -50
+
+      - name: Portable ZIP
+        run: zip -r9 "Kst-$KST_VER-win64-portable.zip" "Kst-$KST_VER"
+
+      - name: NSIS installieren
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\NSIS\makensis.exe")) { choco install nsis -y --no-progress }
+
+      - name: Installer bauen
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" `
+            /DVERSION=$env:KST_VER `
+            /DSRCDIR="$PWD\Kst-$env:KST_VER" `
+            /DOUTFILE="$PWD\Kst-$env:KST_VER-win64-setup.exe" `
+            self\kst-installer.nsi
+
+      - name: Ergebnisse hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kst-${{ env.KST_VER }}-win64
+          path: |
+            Kst-*-win64-portable.zip
+            Kst-*-win64-setup.exe
