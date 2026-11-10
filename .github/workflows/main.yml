@@ -75,6 +75,8 @@ jobs:
           cmake -S kst -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DCMAKE_CXX_FLAGS="-D_POSIX_THREAD_SAFE_FUNCTIONS=200112L" \
+            -DCMAKE_C_FLAGS="-D_POSIX_THREAD_SAFE_FUNCTIONS=200112L" \
             -Dkst_qt5=ON \
             -Dkst_release=ON \
             -Dkst_3rdparty=ON \
