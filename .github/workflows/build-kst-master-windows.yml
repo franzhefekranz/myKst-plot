@@ -1,0 +1,161 @@
+# Kst aus dem master-Branch (Kst 3.x, Qt6) fuer Windows bauen:
+#   - Kst-master-<datum>-<commit>-win64-portable.zip  (entpacken, bin\kst.exe starten)
+#   - Kst-master-<datum>-<commit>-win64-setup.exe     (NSIS-Installer)
+#
+# Benoetigt kst-installer.nsi im Hauptverzeichnis dieses Repos.
+# Start: Actions -> "Build Kst master for Windows" -> "Run workflow".
+
+name: Build Kst master for Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      kst_ref:
+        description: "Kst Branch, Tag oder Commit"
+        default: "master"
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      KST_REF: ${{ github.event.inputs.kst_ref || 'master' }}
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Kst-Quellcode holen
+        uses: actions/checkout@v4
+        with:
+          repository: Kst-plot/kst
+          ref: ${{ env.KST_REF }}
+          path: kst
+
+      - name: Packaging-Skript holen
+        uses: actions/checkout@v4
+        with:
+          path: self
+
+      - name: MSYS2 (UCRT64) mit Qt6 und Plugin-Bibliotheken
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            zip
+            git
+          pacboy: >-
+            toolchain:p
+            cmake:p
+            ninja:p
+            qt6-base:p
+            qt6-svg:p
+            qt6-tools:p
+            gsl:p
+            cfitsio:p
+            matio:p
+            libtiff:p
+
+      - name: Versionsname bestimmen
+        run: |
+          SHA=$(git -C kst rev-parse --short HEAD)
+          DATE=$(git -C kst log -1 --format=%cd --date=format:%Y%m%d)
+          VER=$(sed -n 's/^set(kst_version_\(major\|minor\|patch\) \([0-9]*\))/\2/p' kst/CMakeLists.txt | paste -sd.)
+          echo "KST_VER=${VER:-3}" >> "$GITHUB_ENV"
+          echo "PKG=Kst-master-$DATE-$SHA" >> "$GITHUB_ENV"
+          echo "Kst $VER, Commit $SHA vom $DATE"
+
+      - name: Quellcode fuer Windows/MSYS2 anpassen
+        run: |
+          # misc/ installiert fest verdrahtete Qt5-DLLs, die es bei Qt6 nicht gibt.
+          # Qt- und Laufzeit-DLLs sammelt unten windeployqt + ldd ein.
+          sed -i 's/^\( *\)add_subdirectory(misc)/\1# add_subdirectory(misc)/' kst/CMakeLists.txt
+          grep -n "add_subdirectory(misc)" kst/CMakeLists.txt
+
+      - name: Konfigurieren
+        run: |
+          cmake -S kst -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_FLAGS="-D_POSIX_THREAD_SAFE_FUNCTIONS=200112L" \
+            -DCMAKE_C_FLAGS="-D_POSIX_THREAD_SAFE_FUNCTIONS=200112L" \
+            -DCMAKE_INSTALL_PREFIX="$PWD/$PKG"
+
+      - name: Bauen
+        run: cmake --build build -j 4
+
+      - name: Installieren
+        run: cmake --install build --strip
+
+      - name: Qt- und Laufzeit-DLLs einsammeln (portable)
+        run: |
+          set -e
+          DEST="$PWD/$PKG"
+          BIN="$DEST/bin"
+          ls "$BIN"
+
+          # Qt6-DLLs + Qt-Plugins (platforms, styles, imageformats, iconengines ...)
+          WDQ=$(command -v windeployqt6 || command -v windeployqt-qt6 || command -v windeployqt)
+          "$WDQ" --release --no-translations --no-opengl-sw --no-system-d3d-compiler \
+                 --compiler-runtime "$BIN/kst.exe" "$BIN"/Kst6*.dll \
+            || echo "::warning::windeployqt meldete einen Fehler, es geht mit ldd weiter"
+
+          # Fallback: wichtigste Qt-Plugins sicherstellen
+          QTPLUG=/ucrt64/share/qt6/plugins
+          for d in platforms styles imageformats iconengines; do
+            if [ -d "$QTPLUG/$d" ] && [ ! -d "$BIN/$d" ]; then
+              mkdir -p "$BIN/$d"; cp -v "$QTPLUG/$d"/*.dll "$BIN/$d/"
+            fi
+          done
+
+          # Alle weiteren DLL-Abhaengigkeiten (auch die der Kst-Plugins in lib/kst)
+          for pass in 1 2 3; do
+            find "$DEST" \( -iname '*.exe' -o -iname '*.dll' \) -print0 |
+              xargs -0 -n1 ldd 2>/dev/null |
+              awk '{print $3}' | grep -i '^/ucrt64/' | sort -u |
+              while read -r dll; do
+                [ -f "$BIN/$(basename "$dll")" ] || cp -v "$dll" "$BIN/"
+              done
+          done
+
+          printf '[Paths]\nPrefix=.\nPlugins=.\n' > "$BIN/qt.conf"
+
+          # Import-Bibliotheken braucht zur Laufzeit niemand
+          find "$DEST" -name '*.dll.a' -delete
+          rm -rf "$DEST/include" "$DEST/lib/cmake"
+
+          cp kst/src/images/kst.ico "$DEST/kst.ico"
+          cp kst/COPYING "$DEST/COPYING.txt"
+          echo "Kst $KST_VER (master, $PKG) portable - starten mit bin\\kst.exe" > "$DEST/README.txt"
+
+      - name: Inhalt pruefen
+        continue-on-error: true
+        run: |
+          echo "--- Kst-Plugins:"; ls "$PKG/lib/kst" || true
+          echo "--- Qt-Plugins:"; ls "$PKG/bin/platforms" "$PKG/bin/styles" 2>/dev/null || true
+
+      - name: Portable ZIP
+        run: zip -r9 "$PKG-win64-portable.zip" "$PKG"
+
+      - name: NSIS installieren
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\NSIS\makensis.exe")) { choco install nsis -y --no-progress }
+
+      - name: Installer bauen
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" `
+            /DVERSION="$env:KST_VER-master" `
+            /DEXE=kst.exe `
+            /DAPPID=Kst3 `
+            /DSRCDIR="$PWD\$env:PKG" `
+            /DOUTFILE="$PWD\$env:PKG-win64-setup.exe" `
+            self\kst-installer.nsi
+
+      - name: Ergebnisse hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PKG }}-win64
+          path: |
+            Kst-master-*-win64-portable.zip
+            Kst-master-*-win64-setup.exe
