@@ -72,6 +72,10 @@ jobs:
           sed -i 's/^\( *\)add_subdirectory(misc)/\1# add_subdirectory(misc)/' kst/CMakeLists.txt
           grep -n "add_subdirectory(misc)" kst/CMakeLists.txt
 
+          # Veraltete, handgeschriebene Export-Header (erwarten BUILD_KSTMATH/BUILD_KSTWIDGETS)
+          # verdecken die von CMake generierten. Unter Windows fuehrt das zu dllimport-Fehlern.
+          rm -fv kst/src/libkstmath/kstmath_export.h kst/src/widgets/kstwidgets_export.h
+
       - name: Konfigurieren
         run: |
           cmake -S kst -B build -G Ninja \
